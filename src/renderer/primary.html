@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="UTF-8" />
+  <title>USPWIP Desktop</title>
+  <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self' app:; script-src 'self' app:; connect-src 'self' app: wss://*.peerjs.com; style-src 'self' app: 'unsafe-inline'; img-src 'self' app: data:; worker-src 'self' app: blob:; frame-src 'none'; font-src 'self' app: data:;" />
+</head>
+
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/primary.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,10 @@
+* {
+  font-family: Arial, Helvetica, sans-serif;
+  user-select: none;
+}
+
+:root {
+  --notification-z-index: 3000;
+  --pointer-z-index: 2000;
+  --monitor-locator-z-index: 1000;
+}
