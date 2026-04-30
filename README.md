@@ -1,6 +1,8 @@
 # USPWIP Desktop README
 ![](demo.png)
 
+*See https://github.com/nicholasubc/usp-wip-web for web client*
+
 ### Install
 
 ```bash
