@@ -1,11 +1,16 @@
 <script setup>
 import { inject, computed } from 'vue'
-import possessive from '@wardrakus/possessive'
 import Player from './Player.vue'
 
 const hostName = inject('hostName')
 const pointers = inject('pointers')
 // const joinURL = inject('joinURL')
+
+// inlined from @wardrakus/possessive@0.0.1 (MIT) to drop a single-maintainer dependency
+function possessive(str) {
+  if (!str) return str
+  return str.slice(-1).toLowerCase() === 's' ? `${str}’` : `${str}’s`
+}
 
 const sortedPointers = computed(() => [...pointers.value].sort((a, b) => a.number - b.number))
 
