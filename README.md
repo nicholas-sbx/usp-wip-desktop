@@ -43,9 +43,19 @@ While a guest's picture-in-picture controller has focus, whatever they type show
 
 Kicking a guest removes their notes.
 
-### CI
+### CI and releases
 
-Every pull request and push to `main` runs lint, tests and the build in GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)), then packages the Linux AppImage and the Windows installer. Download them from the workflow run's **Artifacts** section (kept 14 days). Builds are unsigned and nothing is published.
+Every pull request and push to `main` runs lint, tests and the build in GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)), then packages the Linux AppImage and the Windows installer. Download them from the workflow run's **Artifacts** section (kept 14 days). Builds are unsigned.
+
+**Releasing:** bump the version and merge it to `main`:
+
+```bash
+$ npm version minor --no-git-tag-version   # or patch / major, or e.g. 1.2.0-beta.1
+```
+
+When `main` has a version without a release yet, CI tags it `vX.Y.Z` and publishes both installers (plus `SHA256SUMS.txt`) as a GitHub release with notes generated from the merged pull requests. Versions with a suffix (`1.2.0-beta.1`) become pre-releases.
+
+**Room links** point at `http://localhost:5500/public` (the web client served locally, e.g. with VS Code Live Server) unless the `USPWIP_WEB_BASE_URL` Actions variable is set to where [usp-wip-web](https://github.com/nicholas-sbx/usp-wip-web)'s `public/` folder is hosted.
 
 ### Linux overlay backends
 

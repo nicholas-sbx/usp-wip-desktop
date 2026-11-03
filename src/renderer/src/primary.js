@@ -18,7 +18,13 @@ import {
   sanitizeTypedText
 } from './typing'
 
-const USPWIP_WEB_BASE_URL = 'http://localhost:5500/public'
+// Where the guest join page (usp-wip-web's public/ folder) is served from.
+// Set VITE_USPWIP_WEB_BASE_URL at build time (CI: the USPWIP_WEB_BASE_URL
+// repository variable); the default is a local static server such as VS Code
+// Live Server on port 5500, which only works on this machine.
+const USPWIP_WEB_BASE_URL = (
+  import.meta.env.VITE_USPWIP_WEB_BASE_URL || 'http://localhost:5500/public'
+).replace(/\/+$/, '')
 
 // ---- limits for data coming from remote peers (anyone with the room link)
 const MAX_PLAYERS = 16 // pointers shown on the overlay
