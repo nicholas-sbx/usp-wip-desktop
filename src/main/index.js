@@ -5,6 +5,7 @@ import icon from '../../resources/icon.png?asset'
 import path from 'node:path'
 import url from 'node:url'
 import { LayerShellOverlay, probeLayerShell, resolveHelperPath } from './layerShellOverlay'
+import { FONT_STEPS, HOLD, MAX_NOTES, TYPING } from '../renderer/src/typing'
 
 // ---------------------------------------------------------------------------
 // Overlay backend selection (must happen before the app is ready)
@@ -74,11 +75,11 @@ const RENDERER_ROOT = path.join(__dirname, '../renderer')
 const DEV_RENDERER_URL = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 const MAX_POINTERS = 32
-const MAX_NOTES = 128
-const MAX_TEXT = 400 // typed text (the renderer caps it at 200)
+// the same limits the primary window applies before sending
+const MAX_TEXT = TYPING.maxLength
 const MAX_MASK_RANGES = 64
-const MAX_FONT_STEP = 3 // FONT_STEPS in renderer/src/typing.js
-const MAX_HOLD_MS = 60000
+const MAX_FONT_STEP = FONT_STEPS.length - 1
+const MAX_HOLD_MS = HOLD.maxMs
 const MAX_OVERLAY_DIM = 16384
 
 function clampNumber(value, min, max, fallback = 0) {
