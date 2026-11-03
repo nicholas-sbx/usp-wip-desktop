@@ -23,6 +23,8 @@ const matcher = new RegExpMatcher({
 })
 
 const MARKS = /\p{M}/gu
+// zero-width and other invisible format characters: kept in the text, ignored for matching
+const INVISIBLE = /^\p{Cf}$/u
 // 3+ single letters, each separated by 1-2 non-alphanumeric characters
 const SPACED_LETTERS = /(?<![\p{L}\p{N}])\p{L}(?:[^\p{L}\p{N}\n]{1,2}\p{L}){2,}(?![\p{L}\p{N}])/gu
 const LETTER = /\p{L}/u
@@ -31,7 +33,8 @@ const LETTER = /\p{L}/u
  * Normalized copy of `text` for matching, plus for each of its UTF-16 code
  * units the [from, to) range of the original text it came from.
  * NFKD folds fancy letters (𝒇, Ｆ, ⓕ, ﬀ) to ASCII and splits off accents,
- * which are dropped (and attributed to the letter before them).
+ * which are dropped (and attributed to the letter before them), like invisible
+ * characters (zero-width space/joiner, soft hyphen), so they can't split a word.
  */
 function normalizedView(text) {
   let view = ''
@@ -40,8 +43,9 @@ function normalizedView(text) {
   for (let i = 0; i < text.length;) {
     const cp = text.codePointAt(i)
     const len = cp > 0xffff ? 2 : 1
+    const char = String.fromCodePoint(cp)
     const folded =
-      cp < 0x80 ? text[i] : String.fromCodePoint(cp).normalize('NFKD').replace(MARKS, '')
+      cp < 0x80 ? text[i] : INVISIBLE.test(char) ? '' : char.normalize('NFKD').replace(MARKS, '')
     if (folded === '') {
       for (let k = to.length - 1; k >= 0 && to[k] === i; k--) to[k] = i + len
     } else {

@@ -38,10 +38,13 @@ test('evasions', () => {
   assert.deepEqual(hidden('ＦＵＣＫ'), ['ＦＵＣＫ']) // fullwidth
   assert.deepEqual(hidden('𝒇𝓾𝓬𝓴 off'), ['𝒇𝓾𝓬𝓴']) // math alphanumerics (surrogate pairs)
   assert.deepEqual(hidden('fück'), ['fück'])
-  assert.deepEqual(hidden('fück'), ['fück']) // decomposed accent
+  assert.deepEqual(hidden('fu\u0308ck'), ['fu\u0308ck']) // decomposed accent
   assert.deepEqual(hidden('fuсk'), ['fuсk']) // Cyrillic с
   assert.deepEqual(hidden('what the f u c k'), ['f u c k'])
   assert.deepEqual(hidden('s.h.i.t happens'), ['s.h.i.t'])
+  assert.deepEqual(hidden('fu\u200Bck'), ['fu\u200Bck']) // zero-width space
+  assert.deepEqual(hidden('f\u00ADuck'), ['f\u00ADuck']) // soft hyphen
+  assert.deepEqual(hidden('sh\u200Dit'), ['sh\u200Dit']) // zero-width joiner
 })
 
 test('ranges are UTF-16 offsets into the original text', () => {

@@ -7,7 +7,7 @@
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test src/renderer/src/censor.test.mjs",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test 'src/**/*.test.mjs'",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "dev:x11": "electron-vite dev -- --ozone-platform=x11",

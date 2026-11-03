@@ -6,6 +6,8 @@ import { Peer } from 'peerjs'
 import { useStorage } from '@vueuse/core'
 import { findBadWordRanges } from './censor'
 import {
+  acceptTypingMessage,
+  createTypingState,
   DEFAULT_NOTE_LIFETIME,
   MAX_NOTES,
   MAX_NOTES_PER_PLAYER,
@@ -305,7 +307,7 @@ window.startPeerJS = function () {
             active: false,
             draft: null, // { text, rev } while the guest is typing
             draftTimer: null,
-            textSeq: 0 // highest client-text/client-pin seq seen
+            typing: createTypingState()
           }
           publishPointers({ list: true })
           conn.send({
@@ -356,17 +358,16 @@ window.startPeerJS = function () {
           localPointer.active = data.content.active === true
           publishPointers()
         } else if (data.type === 'client-text' || data.type === 'client-pin') {
-          // content: { text: <the guest's whole draft>, seq }. Data channels are
-          // unordered, so anything older than what we've already applied is dropped.
+          // content: { text: <the guest's whole draft>, seq }; see acceptTypingMessage
           const localPointer = internalPointers[conn.peer]
-          const seq = data.content?.seq
-          if (!localPointer || !Number.isSafeInteger(seq) || seq <= localPointer.textSeq) return
-          localPointer.textSeq = seq
+          if (!localPointer) return
+          const action = acceptTypingMessage(localPointer.typing, data.type, data.content?.seq)
+          if (!action) return
           const text = sanitizeTypedText(data.content?.text)
-          if (data.type === 'client-text') {
+          if (action.draft) {
             if (setDraft(localPointer, text)) publishPointers()
           } else {
-            pinNote(localPointer, text)
+            pinNote(localPointer, text, action.clearDraft)
           }
         } else if (data.type === 'ping') {
           conn.send({
@@ -452,9 +453,9 @@ function removeNotes(predicate) {
   publishNotes()
 }
 
-/** Pins `text` where the guest's pointer is, replacing their draft. */
-function pinNote(pointer, text) {
-  setDraft(pointer, '')
+/** Pins `text` where the guest's pointer is (replacing their draft, unless a newer one is showing). */
+function pinNote(pointer, text, clearDraft = true) {
+  if (clearDraft) setDraft(pointer, '')
   text = text.trim()
   if (text) {
     const createdAt = Date.now()
