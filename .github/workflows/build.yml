@@ -1,0 +1,92 @@
+# Lints, tests and builds the app on every push and pull request, then packages
+# the Linux AppImage (with the native Wayland overlay helper) and the Windows
+# installer. Download them from the run's "Artifacts" section.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# read-only token; nothing here publishes anything
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: 22
+  # unsigned builds: don't go looking for code signing certificates
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+jobs:
+  check:
+    name: Lint, test, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  linux:
+    name: Linux AppImage
+    needs: check
+    # the oldest supported runner: the native helper links against its glibc,
+    # so building here keeps it working on older distributions
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install build tools for the Wayland overlay helper
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc make pkg-config libwayland-dev
+      - run: npm ci
+      - run: npm run build:linux -- --publish never
+      - name: Check the helper made it into the package
+        run: test -x dist/linux-unpacked/resources/uspwip-wl-overlay
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: uspwip-desktop-linux
+          path: dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows installer
+    needs: check
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build:win -- --publish never
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: uspwip-desktop-windows
+          path: dist/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14

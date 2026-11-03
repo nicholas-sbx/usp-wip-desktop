@@ -43,6 +43,10 @@ While a guest's picture-in-picture controller has focus, whatever they type show
 
 Kicking a guest removes their notes.
 
+### CI
+
+Every pull request and push to `main` runs lint, tests and the build in GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)), then packages the Linux AppImage and the Windows installer. Download them from the workflow run's **Artifacts** section (kept 14 days). Builds are unsigned and nothing is published.
+
 ### Linux overlay backends
 
 | Session | Overlay |
