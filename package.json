@@ -7,6 +7,7 @@
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test 'src/**/*.test.mjs'",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "dev:x11": "electron-vite dev -- --ozone-platform=x11",
@@ -20,6 +21,7 @@
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
     "@vueuse/core": "^13.9.0",
+    "obscenity": "^0.4.6",
     "peerjs": "^1.5.5"
   },
   "devDependencies": {

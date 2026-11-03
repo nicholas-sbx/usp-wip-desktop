@@ -1,9 +1,22 @@
 import './assets/primary.css'
 
-import { createApp, ref } from 'vue'
+import { createApp, ref, watch } from 'vue'
 import PrimaryApp from './PrimaryApp.vue'
 import { Peer } from 'peerjs'
 import { useStorage } from '@vueuse/core'
+import { findBadWordRanges } from './censor'
+import {
+  acceptTypingMessage,
+  createTypingState,
+  DEFAULT_NOTE_LIFETIME,
+  draftHoldMs,
+  fontStep,
+  MAX_NOTES,
+  MAX_NOTES_PER_PLAYER,
+  NOTE_LIFETIMES,
+  TYPING,
+  sanitizeTypedText
+} from './typing'
 
 const USPWIP_WEB_BASE_URL = 'http://localhost:5500/public'
 
@@ -37,8 +50,15 @@ class JsonOnlyPeer extends Peer {
 }
 
 const hostName = useStorage('host-name', '')
+// host settings
+const censorEnabled = useStorage('censor-enabled', true)
+const noteLifetime = useStorage('note-lifetime-seconds', DEFAULT_NOTE_LIFETIME)
+if (!NOTE_LIFETIMES.some((o) => o.seconds === noteLifetime.value)) {
+  noteLifetime.value = DEFAULT_NOTE_LIFETIME
+}
 const joinURL = ref('')
 const pointers = ref([])
+const noteCount = ref(0)
 const whichScreen = ref('start')
 
 const app = createApp(PrimaryApp)
@@ -46,12 +66,17 @@ app.provide('hostName', hostName)
 app.provide('joinURL', joinURL)
 app.provide('pointers', pointers)
 app.provide('whichScreen', whichScreen)
+app.provide('censorEnabled', censorEnabled)
+app.provide('noteLifetime', noteLifetime)
+app.provide('noteCount', noteCount)
 app.mount('#app')
 
 var peer
 var internalPointers = {}
+var notes = []
+var lastNoteId = 0
 // the connection each guest's pointer belongs to (kept out of the pointer
-// objects, which are sent to the overlay as they are)
+// objects, which are turned into what the overlay gets)
 var pointerConns = new Map()
 var overlayDimensions = { width: 0, height: 0 }
 var joinTokens = JOIN_BURST
@@ -62,7 +87,24 @@ window.api.receive('overlay-dimensions', (ovd) => {
 })
 window.api.send('primary-ready')
 
-sendIntPtUpdate(Object.values(internalPointers))
+publishPointers()
+
+// re-render everything when the host changes a setting
+watch(censorEnabled, () => {
+  publishPointers({ list: true })
+  publishNotes()
+})
+watch(noteLifetime, () => {
+  for (const note of notes) {
+    note.expiresAt = noteExpiry(note.createdAt)
+    scheduleNoteExpiry(note)
+  }
+  publishNotes()
+})
+
+window.clearNotes = function () {
+  removeNotes(() => true)
+}
 
 window.copyJoinLink = async function () {
   try {
@@ -88,10 +130,11 @@ window.kickPeer = function (peerId) {
 
   pointerConns.delete(peerId)
   if (peerId in internalPointers) {
+    clearTimeout(internalPointers[peerId].draftTimer)
     delete internalPointers[peerId]
-    pointers.value = Object.values(internalPointers)
-    sendIntPtUpdate(Object.values(internalPointers))
+    publishPointers({ list: true })
   }
+  removeNotes((note) => note.peerId === peerId)
 }
 
 function destroyPeer() {
@@ -102,10 +145,11 @@ function destroyPeer() {
     console.error(err)
   }
   peer = null
+  for (const p of Object.values(internalPointers)) clearTimeout(p.draftTimer)
   internalPointers = {}
   pointerConns.clear()
-  pointers.value = []
-  sendIntPtUpdate([])
+  publishPointers({ list: true })
+  removeNotes(() => true)
 }
 
 window.destroyPeerJS = function () {
@@ -274,14 +318,16 @@ window.startPeerJS = function () {
             orgY: 0,
             rotation: 0,
             mousedown: false,
-            active: false
+            active: false,
+            draft: null, // { text, rev, seq, holdMs, step } while the guest is typing
+            draftTimer: null,
+            typing: createTypingState()
           }
           pointerConns.set(conn.peer, conn)
-          pointers.value = Object.values(internalPointers)
-          sendIntPtUpdate(Object.values(internalPointers))
+          publishPointers({ list: true })
           conn.send({
             type: 'host-introduction',
-            content: { name: hostName.value }
+            content: { name: hostName.value, typing: TYPING }
           })
           const {
             color: pointerColor,
@@ -294,7 +340,8 @@ window.startPeerJS = function () {
             pointerColor,
             pointerColor,
             '#FFFFFF',
-            4000
+            4000,
+            maskFor(pointerName)
           )
         } else if (data.type === 'client-mousemove') {
           const localPointer = internalPointers[conn.peer]
@@ -324,7 +371,19 @@ window.startPeerJS = function () {
           }
           localPointer.mousedown = localMousedown
           localPointer.active = data.content.active === true
-          sendIntPtUpdate(Object.values(internalPointers))
+          publishPointers()
+        } else if (data.type === 'client-text' || data.type === 'client-pin') {
+          // content: { text: <the guest's whole draft>, seq }; see acceptTypingMessage
+          const localPointer = internalPointers[conn.peer]
+          if (!localPointer) return
+          const action = acceptTypingMessage(localPointer.typing, data.type, data.content?.seq)
+          if (!action) return
+          const text = sanitizeTypedText(data.content?.text)
+          if (action.draft) {
+            if (setDraft(localPointer, text)) publishPointers()
+          } else {
+            pinNote(localPointer, text, action.clearDraft)
+          }
         } else if (data.type === 'ping') {
           conn.send({
             type: 'pong'
@@ -344,6 +403,7 @@ window.startPeerJS = function () {
       const pointerColor = internalPointers[conn.peer]?.color || '#000000'
       const pointerName = internalPointers[conn.peer]?.name || 'Unknown'
       if (conn.peer in internalPointers) {
+        clearTimeout(internalPointers[conn.peer].draftTimer)
         delete internalPointers[conn.peer]
       }
       sendNotification(
@@ -352,21 +412,171 @@ window.startPeerJS = function () {
         pointerColor,
         pointerColor,
         '#FFFFFF',
-        4000
+        4000,
+        maskFor(pointerName)
       )
-      pointers.value = Object.values(internalPointers)
-      sendIntPtUpdate(Object.values(internalPointers))
+      // (their pinned notes stay until they expire; kicking removes them)
+      publishPointers({ list: true })
     })
   })
 }
 
-function sendIntPtUpdate(ipValues) {
-  window.api.send('update-pointers', ipValues)
+// ---- typing: drafts and pinned notes
+
+/** ranges of `text` to hide, if the host has the filter on */
+function maskFor(text) {
+  return censorEnabled.value ? findBadWordRanges(text) : []
 }
 
-function sendNotification(content, borderColor, textColor, shadowColor, backgroundColor, timeout) {
+/** Updates a guest's draft; returns whether anything visible changed. */
+function setDraft(pointer, text) {
+  if (!text.trim()) {
+    clearTimeout(pointer.draftTimer)
+    const had = pointer.draft !== null
+    pointer.draft = null
+    return had
+  }
+  if (pointer.draft?.text === text) return false
+  clearTimeout(pointer.draftTimer)
+  const holdMs = draftHoldMs(text)
+  pointer.draft = {
+    text,
+    rev: (pointer.draft?.rev ?? 0) + 1,
+    seq: pointer.typing.textSeq,
+    holdMs,
+    step: fontStep(text, pointer.draft?.step)
+  }
+  pointer.draftTimer = setTimeout(() => expireDraft(pointer), holdMs + TYPING.fadeMs)
+  return true
+}
+
+/** The overlay has faded the draft out: drop it and tell the guest to clear theirs. */
+function expireDraft(pointer) {
+  const seq = pointer.draft?.seq
+  pointer.draft = null
+  publishPointers()
+  try {
+    pointerConns.get(pointer.peerId)?.send({ type: 'host-draft-expired', content: { seq } })
+  } catch (err) {
+    console.error(err)
+  }
+}
+
+function noteExpiry(createdAt) {
+  return noteLifetime.value > 0 ? createdAt + noteLifetime.value * 1000 : null
+}
+
+function scheduleNoteExpiry(note) {
+  clearTimeout(note.timer)
+  note.timer =
+    note.expiresAt === null
+      ? null
+      : setTimeout(() => removeNotes((n) => n === note), Math.max(0, note.expiresAt - Date.now()))
+}
+
+function removeNotes(predicate) {
+  const kept = notes.filter((note) => !predicate(note))
+  if (kept.length === notes.length) return
+  for (const note of notes) if (!kept.includes(note)) clearTimeout(note.timer)
+  notes = kept
+  publishNotes()
+}
+
+/** Pins `text` where the guest's pointer is (replacing their draft, unless a newer one is showing). */
+function pinNote(pointer, text, clearDraft = true) {
+  const step = pointer.draft?.step ?? fontStep(text)
+  if (clearDraft) setDraft(pointer, '')
+  text = text.trim()
+  if (text) {
+    const createdAt = Date.now()
+    const note = {
+      id: ++lastNoteId,
+      peerId: pointer.peerId,
+      number: pointer.number,
+      color: pointer.color,
+      x: pointer.x,
+      y: pointer.y,
+      text,
+      step,
+      createdAt,
+      expiresAt: noteExpiry(createdAt),
+      timer: null
+    }
+    notes.push(note)
+    scheduleNoteExpiry(note)
+    // too many notes: the oldest go first
+    const theirs = notes.filter((n) => n.peerId === pointer.peerId)
+    const dropped = new Set(theirs.slice(0, Math.max(0, theirs.length - MAX_NOTES_PER_PLAYER)))
+    const rest = notes.filter((n) => !dropped.has(n))
+    for (const n of rest.slice(0, Math.max(0, rest.length - MAX_NOTES))) dropped.add(n)
+    if (dropped.size) removeNotes((n) => dropped.has(n))
+    else publishNotes()
+  }
+  publishPointers()
+}
+
+function publishNotes() {
+  noteCount.value = notes.length
+  window.api.send(
+    'update-notes',
+    notes.map((note) => ({
+      id: note.id,
+      number: note.number,
+      color: note.color,
+      x: note.x,
+      y: note.y,
+      text: note.text,
+      mask: maskFor(note.text),
+      step: note.step,
+      createdAt: note.createdAt,
+      expiresAt: note.expiresAt
+    }))
+  )
+}
+
+/**
+ * Sends every pointer (with its draft) to the overlay. `list` also refreshes
+ * the player list in this window, which only shows names, so mouse movement
+ * doesn't need to re-render it.
+ */
+function publishPointers({ list = false } = {}) {
+  const views = Object.values(internalPointers).map((p) => ({
+    peerId: p.peerId,
+    number: p.number,
+    name: p.name,
+    nameMask: maskFor(p.name),
+    color: p.color,
+    x: p.x,
+    y: p.y,
+    rotation: p.rotation,
+    mousedown: p.mousedown,
+    active: p.active,
+    draft: p.draft
+      ? {
+          text: p.draft.text,
+          mask: maskFor(p.draft.text),
+          rev: p.draft.rev,
+          holdMs: p.draft.holdMs,
+          step: p.draft.step
+        }
+      : null
+  }))
+  if (list) pointers.value = views
+  window.api.send('update-pointers', views)
+}
+
+function sendNotification(
+  content,
+  borderColor,
+  textColor,
+  shadowColor,
+  backgroundColor,
+  timeout,
+  mask = []
+) {
   window.api.send('toast-notification', {
     content: content,
+    mask: mask,
     colors: {
       border: borderColor,
       text: textColor,

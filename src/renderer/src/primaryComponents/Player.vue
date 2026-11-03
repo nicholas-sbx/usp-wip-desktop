@@ -1,4 +1,6 @@
 <script setup>
+import MaskedText from '../components/MaskedText.vue'
+
 defineProps({
   pointer: Object
 })
@@ -11,7 +13,9 @@ function kick(peerId) {
 <template>
   <div class="player">
     <div class="playerNumber">{{ pointer.number }}</div>
-    <div class="playerName">{{ pointer.name }}</div>
+    <div class="playerName">
+      <MaskedText :text="pointer.name" :mask="pointer.nameMask" mask-color="rgba(0, 0, 0, 0.8)" />
+    </div>
     <button class="playerKickButton" @click="kick(pointer.peerId)">Kick</button>
   </div>
 </template>
