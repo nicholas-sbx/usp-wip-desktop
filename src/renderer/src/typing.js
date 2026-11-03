@@ -1,18 +1,53 @@
-// Guest typing: shared limits and text cleanup.
+// Guest typing: shared limits, timing and text cleanup.
 //
 // A guest's keystrokes in the picture-in-picture controller show up as a
-// "draft" next to their pointer. It stays fully visible while they type, starts
-// fading `idleMs` after the last change and is gone `fadeMs` later. Clicking
-// pins the draft where it is as a smaller note that lasts `noteLifetime`.
-// The guest page gets these numbers in host-introduction, so it clears its own
-// draft at the same moment the overlay finishes fading it.
+// "draft" next to their pointer. It stays fully visible while they type and
+// for draftHoldMs() after the last change, then fades out over `fadeMs`.
+// When it is gone the host tells the guest page, which clears its own copy.
+// Clicking pins the draft where it is as a smaller note that lasts
+// `noteLifetime`.
+
+// How long a draft stays fully visible after the last change. Short text
+// needs less time than long text, but it grows with the logarithm of the
+// length, so it tapers off, and even the longest draft fades within 10 s:
+// 1 char ~3.2 s, 20 ~5.5 s, 80 ~7.8 s, 200 ~9.5 s.
+export const HOLD = Object.freeze({ baseMs: 3000, perLogMs: 2000, scale: 8, maxMs: 10000 })
+
+export function draftHoldMs(text) {
+  const length = Array.from(text ?? '').length
+  const ms = HOLD.baseMs + HOLD.perLogMs * Math.log1p(length / HOLD.scale)
+  return Math.round(Math.min(HOLD.maxMs, ms))
+}
 
 export const TYPING = Object.freeze({
-  idleMs: 2500,
   fadeMs: 1500,
+  maxHoldMs: HOLD.maxMs,
   maxLength: 200, // UTF-16 code units
   maxLines: 5
 })
+
+// Longer text gets smaller in steps rather than continuously (text shrinking
+// with every keystroke would be distracting). Thresholds grow ~3x, sizes
+// shrink less each step. Notes use the matching smaller size.
+export const FONT_STEPS = Object.freeze([
+  { upTo: 20, draftPx: 24, notePx: 16 },
+  { upTo: 60, draftPx: 20, notePx: 14 },
+  { upTo: 120, draftPx: 17, notePx: 13 },
+  { upTo: Infinity, draftPx: 15, notePx: 12 }
+])
+// a step only goes back up once the text is this much shorter than its
+// threshold, so backspacing around a threshold doesn't flip sizes
+const STEP_HYSTERESIS = 5
+
+/** FONT_STEPS index for `text`, given the step it had before (if any). */
+export function fontStep(text, previous = 0) {
+  const length = Array.from(text ?? '').length
+  const last = FONT_STEPS.length - 1
+  let step = Number.isInteger(previous) ? Math.min(Math.max(previous, 0), last) : 0
+  while (step < last && length > FONT_STEPS[step].upTo) step++
+  while (step > 0 && length <= FONT_STEPS[step - 1].upTo - STEP_HYSTERESIS) step--
+  return step
+}
 
 export const NOTE_LIFETIMES = Object.freeze([
   { seconds: 15, label: '15 seconds' },

@@ -1,7 +1,16 @@
 // npm test
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { acceptTypingMessage, createTypingState, sanitizeTypedText, TYPING } from './typing.js'
+import {
+  acceptTypingMessage,
+  createTypingState,
+  draftHoldMs,
+  FONT_STEPS,
+  fontStep,
+  HOLD,
+  sanitizeTypedText,
+  TYPING
+} from './typing.js'
 
 test('sanitizer keeps everything a person could have meant to type', () => {
   for (const text of [
@@ -115,4 +124,51 @@ test('duplicate and malformed messages are ignored', () => {
     assert.equal(acceptTypingMessage(state, 'client-text', seq), null, String(seq))
   }
   assert.equal(acceptTypingMessage(state, 'something-else', 9), null)
+})
+
+test('hold time grows with length but tapers off and is capped', () => {
+  const at = (n) => draftHoldMs('x'.repeat(n))
+  const samples = [0, 1, 5, 10, 20, 40, 80, 120, 200, 1000].map(at)
+  for (let i = 1; i < samples.length; i++) assert.ok(samples[i] >= samples[i - 1])
+  assert.ok(at(1) >= 3000 && at(1) <= 3500, `1 char: ${at(1)}`)
+  assert.ok(at(20) >= 5000 && at(20) <= 6000, `20 chars: ${at(20)}`)
+  assert.ok(at(200) <= HOLD.maxMs && at(1000) === HOLD.maxMs)
+  // tapering: each extra 20 characters adds less time than the 20 before
+  for (let n = 20; n <= 160; n += 20) {
+    assert.ok(at(n + 20) - at(n) <= at(n) - at(n - 20), `taper at ${n}`)
+  }
+  // counts characters, not UTF-16 units
+  assert.equal(draftHoldMs('😀'.repeat(10)), at(10))
+})
+
+test('font size steps down at set points as text gets longer', () => {
+  const sizes = new Set()
+  let step = 0
+  let previousPx = Infinity
+  for (let n = 1; n <= 200; n++) {
+    step = fontStep('x'.repeat(n), step)
+    const px = FONT_STEPS[step].draftPx
+    assert.ok(px <= previousPx, `never grows while typing (${n} chars)`)
+    previousPx = px
+    sizes.add(px)
+  }
+  assert.deepEqual(
+    [...sizes],
+    FONT_STEPS.map((s) => s.draftPx)
+  )
+  assert.equal(fontStep('x'.repeat(20)), 0)
+  assert.equal(fontStep('x'.repeat(21)), 1)
+  for (const s of FONT_STEPS) assert.ok(s.notePx < s.draftPx, 'notes are smaller')
+})
+
+test('backspacing around a threshold does not flicker the size', () => {
+  let step = fontStep('x'.repeat(21), 0) // just over the first threshold
+  const seen = new Set()
+  for (const n of [20, 21, 19, 20, 18, 21, 17, 16]) {
+    step = fontStep('x'.repeat(n), step)
+    seen.add(step)
+  }
+  assert.deepEqual([...seen], [1]) // stays put until clearly shorter
+  assert.equal(fontStep('x'.repeat(15), step), 0)
+  assert.equal(fontStep('x', 'junk'), 0)
 })

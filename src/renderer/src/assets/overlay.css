@@ -28,12 +28,10 @@
 }
 
 .bubble.draft {
-  font-size: 22px;
   padding: 4px 10px;
 }
 
 .bubble.note {
-  font-size: 15px;
   padding: 3px 8px;
   max-width: 320px;
   border-width: 2px;

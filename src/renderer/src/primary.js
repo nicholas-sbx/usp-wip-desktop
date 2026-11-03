@@ -9,6 +9,8 @@ import {
   acceptTypingMessage,
   createTypingState,
   DEFAULT_NOTE_LIFETIME,
+  draftHoldMs,
+  fontStep,
   MAX_NOTES,
   MAX_NOTES_PER_PLAYER,
   NOTE_LIFETIMES,
@@ -27,9 +29,6 @@ const JOIN_BURST = 8 // new connections allowed in a burst...
 const JOIN_REFILL_MS = 1500 // ...then one every JOIN_REFILL_MS
 const MAX_DELTA = 10000 // largest single mouse movement accepted, in px
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
-// keep a faded draft a little longer than the guest does, in case their
-// "cleared" update arrives late
-const DRAFT_GRACE_MS = 1000
 
 /**
  * PeerJS lets the *connecting* peer pick the serialization. The default
@@ -305,8 +304,9 @@ window.startPeerJS = function () {
             rotation: 0,
             mousedown: false,
             active: false,
-            draft: null, // { text, rev } while the guest is typing
+            draft: null, // { text, rev, seq, holdMs, step } while the guest is typing
             draftTimer: null,
+            conn,
             typing: createTypingState()
           }
           publishPointers({ list: true })
@@ -422,15 +422,28 @@ function setDraft(pointer, text) {
   }
   if (pointer.draft?.text === text) return false
   clearTimeout(pointer.draftTimer)
-  pointer.draft = { text, rev: (pointer.draft?.rev ?? 0) + 1 }
-  pointer.draftTimer = setTimeout(
-    () => {
-      pointer.draft = null
-      publishPointers()
-    },
-    TYPING.idleMs + TYPING.fadeMs + DRAFT_GRACE_MS
-  )
+  const holdMs = draftHoldMs(text)
+  pointer.draft = {
+    text,
+    rev: (pointer.draft?.rev ?? 0) + 1,
+    seq: pointer.typing.textSeq,
+    holdMs,
+    step: fontStep(text, pointer.draft?.step)
+  }
+  pointer.draftTimer = setTimeout(() => expireDraft(pointer), holdMs + TYPING.fadeMs)
   return true
+}
+
+/** The overlay has faded the draft out: drop it and tell the guest to clear theirs. */
+function expireDraft(pointer) {
+  const seq = pointer.draft?.seq
+  pointer.draft = null
+  publishPointers()
+  try {
+    pointer.conn?.send({ type: 'host-draft-expired', content: { seq } })
+  } catch (err) {
+    console.error(err)
+  }
 }
 
 function noteExpiry(createdAt) {
@@ -455,6 +468,7 @@ function removeNotes(predicate) {
 
 /** Pins `text` where the guest's pointer is (replacing their draft, unless a newer one is showing). */
 function pinNote(pointer, text, clearDraft = true) {
+  const step = pointer.draft?.step ?? fontStep(text)
   if (clearDraft) setDraft(pointer, '')
   text = text.trim()
   if (text) {
@@ -467,6 +481,7 @@ function pinNote(pointer, text, clearDraft = true) {
       x: pointer.x,
       y: pointer.y,
       text,
+      step,
       createdAt,
       expiresAt: noteExpiry(createdAt),
       timer: null
@@ -496,6 +511,7 @@ function publishNotes() {
       y: note.y,
       text: note.text,
       mask: maskFor(note.text),
+      step: note.step,
       createdAt: note.createdAt,
       expiresAt: note.expiresAt
     }))
@@ -519,7 +535,15 @@ function publishPointers({ list = false } = {}) {
     rotation: p.rotation,
     mousedown: p.mousedown,
     active: p.active,
-    draft: p.draft ? { text: p.draft.text, mask: maskFor(p.draft.text), rev: p.draft.rev } : null
+    draft: p.draft
+      ? {
+          text: p.draft.text,
+          mask: maskFor(p.draft.text),
+          rev: p.draft.rev,
+          holdMs: p.draft.holdMs,
+          step: p.draft.step
+        }
+      : null
   }))
   if (list) pointers.value = views
   window.api.send('update-pointers', views)

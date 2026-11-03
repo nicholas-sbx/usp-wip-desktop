@@ -77,6 +77,8 @@ const MAX_POINTERS = 32
 const MAX_NOTES = 128
 const MAX_TEXT = 400 // typed text (the renderer caps it at 200)
 const MAX_MASK_RANGES = 64
+const MAX_FONT_STEP = 3 // FONT_STEPS in renderer/src/typing.js
+const MAX_HOLD_MS = 60000
 const MAX_OVERLAY_DIM = 16384
 
 function clampNumber(value, min, max, fallback = 0) {
@@ -110,7 +112,9 @@ function sanitizePointer(p) {
     p.draft && typeof p.draft === 'object'
       ? {
           ...sanitizeMaskedText(p.draft.text, p.draft.mask, MAX_TEXT),
-          rev: Math.trunc(clampNumber(p.draft.rev, 0, Number.MAX_SAFE_INTEGER))
+          rev: Math.trunc(clampNumber(p.draft.rev, 0, Number.MAX_SAFE_INTEGER)),
+          holdMs: Math.trunc(clampNumber(p.draft.holdMs, 0, MAX_HOLD_MS, 3000)),
+          step: Math.trunc(clampNumber(p.draft.step, 0, MAX_FONT_STEP))
         }
       : null
   return {
@@ -141,6 +145,7 @@ function sanitizeNote(n) {
     y: clampNumber(n.y, 0, MAX_OVERLAY_DIM),
     text,
     mask,
+    step: Math.trunc(clampNumber(n.step, 0, MAX_FONT_STEP)),
     createdAt: time(n.createdAt) ?? Date.now(),
     expiresAt: time(n.expiresAt)
   }

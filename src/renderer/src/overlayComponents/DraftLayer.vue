@@ -1,18 +1,24 @@
 <script setup>
 // What guests are typing right now, following their pointers. A draft is
-// fully visible while it changes and fades out once they stop typing.
+// fully visible while it changes, stays for a time that depends on its length
+// (holdMs, from the host) and then fades out. Longer text uses a smaller font.
 import { computed, inject } from 'vue'
 import MaskedText from '../components/MaskedText.vue'
-import { TYPING } from '../typing'
+import { FONT_STEPS, TYPING } from '../typing'
 import { bubblePlacement } from './bubblePlacement'
 
 const pointers = inject('pointers')
 const viewport = inject('viewport')
 
 const typing = computed(() => (pointers.value ?? []).filter((p) => p.draft?.text))
-const fade = {
-  animationDuration: `${TYPING.fadeMs}ms`,
-  animationDelay: `${TYPING.idleMs}ms`
+
+function draftStyle(pointer) {
+  return {
+    '--bubble-color': pointer.color,
+    fontSize: `${(FONT_STEPS[pointer.draft.step] ?? FONT_STEPS[0]).draftPx}px`,
+    animationDuration: `${TYPING.fadeMs}ms`,
+    animationDelay: `${pointer.draft.holdMs}ms`
+  }
 }
 </script>
 
@@ -25,11 +31,7 @@ const fade = {
       :style="bubblePlacement(pointer.x, pointer.y, viewport)"
     >
       <!-- keyed by revision: every change restarts the fade timer -->
-      <div
-        :key="pointer.draft.rev"
-        class="bubble draft"
-        :style="{ ...fade, '--bubble-color': pointer.color }"
-      >
+      <div :key="pointer.draft.rev" class="bubble draft" :style="draftStyle(pointer)">
         <MaskedText :text="pointer.draft.text" :mask="pointer.draft.mask" mask-color="#1d1d1d" />
       </div>
     </div>

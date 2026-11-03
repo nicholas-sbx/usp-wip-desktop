@@ -36,7 +36,7 @@ $ npm run build:linux
 
 ### Guest typing and notes
 
-While a guest's picture-in-picture controller has focus, whatever they type shows up next to their pointer on the host's screen. It stays fully visible while they type, starts fading 2.5 s after they stop and is gone 1.5 s later. Clicking pins the text where it is as a smaller note. In the room screen the host can:
+While a guest's picture-in-picture controller has focus, whatever they type shows up next to their pointer on the host's screen. It stays fully visible while they type and for a while after they stop, longer for longer text but tapering off (about 3 s for a word, 5.5 s for a sentence, at most 10 s), then fades out. Longer text steps down to smaller font sizes. Clicking pins the text where it is as a smaller note. In the room screen the host can:
 
 - **Hide bad words**: blacks out bad words in guest names and typed text as they're typed, using [obscenity](https://github.com/jo3-l/obscenity) plus extra checks for fancy Unicode letters and spaced-out letters (`src/renderer/src/censor.js`, tests: `npm test`). The hidden characters keep their exact width, so text never changes shape.
 - **Notes stay**: how long pinned notes last (15 seconds to "until cleared"), and **Clear notes**.

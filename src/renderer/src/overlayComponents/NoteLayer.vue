@@ -3,6 +3,7 @@
 // host's chosen lifetime, then fade out.
 import { inject } from 'vue'
 import MaskedText from '../components/MaskedText.vue'
+import { FONT_STEPS } from '../typing'
 import { bubblePlacement } from './bubblePlacement'
 
 const NOTE_FADE_MS = 1000
@@ -12,6 +13,7 @@ const notes = inject('notes')
 const viewport = inject('viewport')
 
 function noteStyle(note) {
+  const size = FONT_STEPS[note.step] ?? FONT_STEPS[0]
   const now = Date.now()
   const animations = []
   // only animate the "shrink into a note" for a note that was just pinned,
@@ -21,7 +23,13 @@ function noteStyle(note) {
     const delay = Math.max(0, note.expiresAt - now - NOTE_FADE_MS)
     animations.push(`note-fade ${NOTE_FADE_MS}ms linear ${delay}ms forwards`)
   }
-  return { '--bubble-color': note.color, animation: animations.join(', ') || 'none' }
+  return {
+    '--bubble-color': note.color,
+    // the pin animation starts at exactly the size the draft had
+    '--pin-from': size.draftPx / size.notePx,
+    fontSize: `${size.notePx}px`,
+    animation: animations.join(', ') || 'none'
+  }
 }
 </script>
 
@@ -61,7 +69,7 @@ function noteStyle(note) {
 <style>
 @keyframes note-pin {
   from {
-    transform: scale(1.45);
+    transform: scale(var(--pin-from, 1.45));
   }
   to {
     transform: scale(1);
