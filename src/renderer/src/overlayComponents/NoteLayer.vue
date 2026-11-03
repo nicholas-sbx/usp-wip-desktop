@@ -1,7 +1,7 @@
 <script setup>
 // Drafts a guest pinned by clicking. They shrink into place, stay for the
 // host's chosen lifetime, then fade out.
-import { inject } from 'vue'
+import { inject, watch } from 'vue'
 import MaskedText from '../components/MaskedText.vue'
 import { FONT_STEPS } from '../typing'
 import { bubblePlacement } from './bubblePlacement'
@@ -12,7 +12,24 @@ const PIN_ANIMATION_WINDOW_MS = 500
 const notes = inject('notes')
 const viewport = inject('viewport')
 
+// A note's animations are timed once, when it appears. Recomputing the fade
+// delay on a later re-render (another note pinned, filter toggled) would apply
+// the new, shorter delay from the animation's original start, so existing
+// notes would fade out early.
+const styles = new Map() // `${id}:${expiresAt}` -> style
+const styleKey = (note) => `${note.id}:${note.expiresAt}`
+watch(notes, (list) => {
+  const live = new Set((list ?? []).map(styleKey))
+  for (const key of styles.keys()) if (!live.has(key)) styles.delete(key)
+})
+
 function noteStyle(note) {
+  const key = styleKey(note)
+  if (!styles.has(key)) styles.set(key, computeStyle(note))
+  return styles.get(key)
+}
+
+function computeStyle(note) {
   const size = FONT_STEPS[note.step] ?? FONT_STEPS[0]
   const now = Date.now()
   const animations = []
@@ -37,7 +54,7 @@ function noteStyle(note) {
   <div class="noteLayer">
     <div
       v-for="note in notes"
-      :key="`${note.id}:${note.expiresAt}`"
+      :key="styleKey(note)"
       class="notePositioner"
       :style="bubblePlacement(note.x, note.y, viewport)"
     >
