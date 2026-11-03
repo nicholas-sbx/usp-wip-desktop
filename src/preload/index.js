@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 // checks which window each message came from and validates every payload.
 const SEND_CHANNELS = new Set([
   'update-pointers',
+  'update-notes',
   'toast-notification',
   'overlay-ready',
   'overlay-dimensions',
@@ -16,6 +17,7 @@ const SEND_CHANNELS = new Set([
 
 const RECEIVE_CHANNELS = new Set([
   'update-pointers',
+  'update-notes',
   'show-monitor-locator',
   'toast-notification',
   'overlay-dimensions'

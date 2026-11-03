@@ -74,6 +74,9 @@ const RENDERER_ROOT = path.join(__dirname, '../renderer')
 const DEV_RENDERER_URL = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 const MAX_POINTERS = 32
+const MAX_NOTES = 128
+const MAX_TEXT = 400 // typed text (the renderer caps it at 200)
+const MAX_MASK_RANGES = 64
 const MAX_OVERLAY_DIM = 16384
 
 function clampNumber(value, min, max, fallback = 0) {
@@ -82,18 +85,64 @@ function clampNumber(value, min, max, fallback = 0) {
     : fallback
 }
 
+/** [start, end) ranges of `length`-long text to hide (from the bad word filter) */
+function sanitizeMask(mask, length) {
+  if (!Array.isArray(mask)) return []
+  const ranges = []
+  for (const r of mask.slice(0, MAX_MASK_RANGES)) {
+    if (!Array.isArray(r)) continue
+    const start = Math.trunc(clampNumber(r[0], 0, length))
+    const end = Math.trunc(clampNumber(r[1], 0, length))
+    if (end > start) ranges.push([start, end])
+  }
+  return ranges
+}
+
+function sanitizeMaskedText(text, mask, maxLength) {
+  const clean = String(text ?? '').slice(0, maxLength)
+  return { text: clean, mask: sanitizeMask(mask, clean.length) }
+}
+
 function sanitizePointer(p) {
   if (!p || typeof p !== 'object') return null
+  const name = sanitizeMaskedText(p.name, p.nameMask, 15)
+  const draft =
+    p.draft && typeof p.draft === 'object'
+      ? {
+          ...sanitizeMaskedText(p.draft.text, p.draft.mask, MAX_TEXT),
+          rev: Math.trunc(clampNumber(p.draft.rev, 0, Number.MAX_SAFE_INTEGER))
+        }
+      : null
   return {
     peerId: String(p.peerId ?? '').slice(0, 64),
     number: Math.trunc(clampNumber(p.number, 0, 999)),
-    name: String(p.name ?? '').slice(0, 15),
+    name: name.text,
+    nameMask: name.mask,
     color: HEX_COLOR.test(p.color) ? p.color : '#000000',
     x: clampNumber(p.x, 0, MAX_OVERLAY_DIM),
     y: clampNumber(p.y, 0, MAX_OVERLAY_DIM),
     rotation: clampNumber(p.rotation, -1e6, 1e6),
     mousedown: p.mousedown === true,
-    active: p.active === true
+    active: p.active === true,
+    draft: draft?.text ? draft : null
+  }
+}
+
+function sanitizeNote(n) {
+  if (!n || typeof n !== 'object') return null
+  const { text, mask } = sanitizeMaskedText(n.text, n.mask, MAX_TEXT)
+  if (!text) return null
+  const time = (t) => (typeof t === 'number' && Number.isFinite(t) ? t : null)
+  return {
+    id: Math.trunc(clampNumber(n.id, 0, Number.MAX_SAFE_INTEGER)),
+    number: Math.trunc(clampNumber(n.number, 0, 999)),
+    color: HEX_COLOR.test(n.color) ? n.color : '#000000',
+    x: clampNumber(n.x, 0, MAX_OVERLAY_DIM),
+    y: clampNumber(n.y, 0, MAX_OVERLAY_DIM),
+    text,
+    mask,
+    createdAt: time(n.createdAt) ?? Date.now(),
+    expiresAt: time(n.expiresAt)
   }
 }
 
@@ -101,9 +150,11 @@ let notificationSeq = 0
 function sanitizeNotification(n) {
   if (!n || typeof n !== 'object') return null
   const color = (c, fallback) => (HEX_COLOR.test(c) ? c : fallback)
+  const { text, mask } = sanitizeMaskedText(n.content, n.mask, 120)
   return {
     id: ++notificationSeq,
-    content: String(n.content ?? '').slice(0, 120),
+    content: text,
+    mask,
     colors: {
       border: color(n.colors?.border, '#000000'),
       text: color(n.colors?.text, '#000000'),
@@ -204,6 +255,7 @@ app.on('web-contents-created', (_, contents) => {
 var overlayWindow
 var primaryWindow
 var newPointers = []
+var newNotes = []
 var overlayDimensions = { width: 0, height: 0 }
 var overlayDisplayId = 0
 var overlayMoveHint = false
@@ -503,6 +555,12 @@ function onReady() {
     overlayWindow?.webContents?.send('update-pointers', newPointers)
   })
 
+  ipcMain.on('update-notes', (event, list) => {
+    if (!isFrom(primaryWindow, event) || !Array.isArray(list)) return
+    newNotes = list.slice(-MAX_NOTES).map(sanitizeNote).filter(Boolean)
+    overlayWindow?.webContents?.send('update-notes', newNotes)
+  })
+
   ipcMain.on('toast-notification', (event, nfn) => {
     if (!isFrom(primaryWindow, event)) return
     const notification = sanitizeNotification(nfn)
@@ -540,6 +598,7 @@ function onReady() {
   ipcMain.on('overlay-ready', (event) => {
     if (!isFrom(overlayWindow, event)) return
     overlayWindow?.webContents?.send('update-pointers', newPointers)
+    overlayWindow?.webContents?.send('update-notes', newNotes)
     overlayWindow?.webContents?.send('show-monitor-locator', shouldShowOverlay())
   })
 

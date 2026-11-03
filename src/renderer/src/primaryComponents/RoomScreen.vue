@@ -1,9 +1,13 @@
 <script setup>
 import { inject, computed } from 'vue'
 import Player from './Player.vue'
+import { NOTE_LIFETIMES } from '../typing'
 
 const hostName = inject('hostName')
 const pointers = inject('pointers')
+const censorEnabled = inject('censorEnabled')
+const noteLifetime = inject('noteLifetime')
+const noteCount = inject('noteCount')
 // const joinURL = inject('joinURL')
 
 // inlined from @wardrakus/possessive@0.0.1 (MIT) to drop a single-maintainer dependency
@@ -21,12 +25,33 @@ function destroy() {
 function copyLink() {
   window.copyJoinLink()
 }
+
+function clearNotes() {
+  window.clearNotes()
+}
 </script>
 
 <template>
   <div class="roomScreen">
     <h1 class="roomString">{{ possessive(hostName) }} room</h1>
     <button class="copyButon" @click="copyLink()">Click to copy link again</button>
+    <div class="roomSettings">
+      <label title="Blacks out bad words in guest names and typed text">
+        <input v-model="censorEnabled" type="checkbox" />
+        Hide bad words
+      </label>
+      <label title="How long pinned notes stay on screen">
+        Notes stay
+        <select v-model.number="noteLifetime">
+          <option v-for="option in NOTE_LIFETIMES" :key="option.seconds" :value="option.seconds">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+      <button class="clearNotesButton" :disabled="!noteCount" @click="clearNotes()">
+        Clear notes{{ noteCount ? ` (${noteCount})` : '' }}
+      </button>
+    </div>
     <div class="playerListWrap">
       <div v-if="pointers?.length" class="playerList">
         <Player v-for="pointer in sortedPointers" :key="pointer.number" :pointer="pointer" />
@@ -56,7 +81,28 @@ function copyLink() {
 }
 
 .copyButon {
-  margin: 14px;
+  margin: 14px 14px 8px;
+}
+
+.roomSettings {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 0 10px 8px;
+  font-size: 13px;
+}
+
+.roomSettings label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.roomSettings select,
+.clearNotesButton {
+  font-size: 12px;
 }
 
 .copyButon:hover {

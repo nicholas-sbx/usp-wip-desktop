@@ -1,6 +1,6 @@
 import './assets/overlay.css'
 
-import { createApp, ref } from 'vue'
+import { createApp, reactive, ref } from 'vue'
 import OverlayApp from './OverlayApp.vue'
 
 const MAX_NOTIFICATIONS = 6
@@ -15,11 +15,24 @@ const zoom = (() => {
 if (zoom !== 1) document.documentElement.style.zoom = String(zoom)
 
 const pointers = ref([])
+const notes = ref([])
 const notifications = ref([])
 const showLocator = ref(false)
+// the overlay's size in the same logical px the host uses for pointer positions
+const viewport = reactive({ width: 0, height: 0 })
+function updateViewport() {
+  viewport.width = Math.round(window.innerWidth / zoom)
+  viewport.height = Math.round(window.innerHeight / zoom)
+}
+updateViewport()
+window.addEventListener('resize', updateViewport)
 
 window.api.receive('update-pointers', (newPointers) => {
   pointers.value = newPointers
+})
+
+window.api.receive('update-notes', (newNotes) => {
+  notes.value = newNotes
 })
 
 window.api.receive('show-monitor-locator', (show) => {
@@ -41,13 +54,12 @@ window.api.receive('toast-notification', (notification) => {
 })
 
 window.api.send('overlay-ready')
-window.api.send('overlay-dimensions', {
-  width: Math.round(window.innerWidth / zoom),
-  height: Math.round(window.innerHeight / zoom)
-})
+window.api.send('overlay-dimensions', { width: viewport.width, height: viewport.height })
 
 const app = createApp(OverlayApp)
 app.provide('pointers', pointers)
+app.provide('notes', notes)
+app.provide('viewport', viewport)
 app.provide('notifications', notifications)
 app.provide('showLocator', showLocator)
 app.mount('#app')

@@ -1,4 +1,6 @@
 <script setup>
+import MaskedText from '../components/MaskedText.vue'
+
 defineProps({
   notification: Object
 })
@@ -6,7 +8,11 @@ defineProps({
 
 <template>
   <div class="notification">
-    {{ notification.content }}
+    <MaskedText
+      :text="notification.content"
+      :mask="notification.mask"
+      :mask-color="notification.colors.text"
+    />
   </div>
 </template>
 
