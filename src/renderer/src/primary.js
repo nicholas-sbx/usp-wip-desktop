@@ -7,6 +7,35 @@ import { useStorage } from '@vueuse/core'
 
 const USPWIP_WEB_BASE_URL = 'http://localhost:5500/public'
 
+// ---- limits for data coming from remote peers (anyone with the room link)
+const MAX_PLAYERS = 16 // pointers shown on the overlay
+const MAX_CONNECTIONS = 24 // open + pending data connections
+const INTRO_TIMEOUT_MS = 10000 // must send client-introduction within this
+const MSG_RATE_LIMIT = 150 // messages per peer per second (client sends <= ~60)
+const JOIN_BURST = 8 // new connections allowed in a burst...
+const JOIN_REFILL_MS = 1500 // ...then one every JOIN_REFILL_MS
+const MAX_DELTA = 10000 // largest single mouse movement accepted, in px
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+
+/**
+ * PeerJS lets the *connecting* peer pick the serialization. The default
+ * "binary" serializer reassembles chunked messages with no size/time limit
+ * (a remote peer can exhaust our memory), so only JSON connections are kept
+ * (each JSON message is a single, size-capped data channel message): the
+ * 'connection' handler closes any other kind before its channel opens, so
+ * nothing is ever parsed with another serializer. The serializer lookup table
+ * is a plain object, so `serialization: "constructor"` would yield a bogus
+ * connection that makes peer.destroy() throw (or a TypeError inside PeerJS
+ * for other unknown names): unknown names get the JSON serializer instead.
+ */
+class JsonOnlyPeer extends Peer {
+  constructor(...args) {
+    super(...args)
+    const known = Object.assign(Object.create(null), this._serializers)
+    this._serializers = new Proxy(known, { get: (table, name) => table[name] ?? table.json })
+  }
+}
+
 const hostName = useStorage('host-name', '')
 const joinURL = ref('')
 const pointers = ref([])
@@ -21,7 +50,12 @@ app.mount('#app')
 
 var peer
 var internalPointers = {}
+// the connection each guest's pointer belongs to (kept out of the pointer
+// objects, which are sent to the overlay as they are)
+var pointerConns = new Map()
 var overlayDimensions = { width: 0, height: 0 }
+var joinTokens = JOIN_BURST
+var joinRefillTimer = null
 
 window.api.receive('overlay-dimensions', (ovd) => {
   overlayDimensions = ovd
@@ -43,8 +77,7 @@ window.copyJoinLink = async function () {
 window.kickPeer = function (peerId) {
   if (!peer || !peerId) return
 
-  const conn = peer.connections[peerId]?.[0]
-  if (conn) {
+  for (const conn of peer.connections[peerId] ?? []) {
     try {
       conn.close()
     } catch (err) {
@@ -53,29 +86,93 @@ window.kickPeer = function (peerId) {
     }
   }
 
+  pointerConns.delete(peerId)
   if (peerId in internalPointers) {
     delete internalPointers[peerId]
     pointers.value = Object.values(internalPointers)
+    sendIntPtUpdate(Object.values(internalPointers))
   }
+}
+
+function destroyPeer() {
+  if (!peer) return
+  try {
+    peer.destroy()
+  } catch (err) {
+    console.error(err)
+  }
+  peer = null
+  internalPointers = {}
+  pointerConns.clear()
+  pointers.value = []
+  sendIntPtUpdate([])
 }
 
 window.destroyPeerJS = function () {
   whichScreen.value = 'start'
-  peer?.destroy()
+  destroyPeer()
+}
+
+function newRoomId() {
+  // 64 bits: short enough to share, not practical to guess
+  const bytes = crypto.getRandomValues(new Uint8Array(8))
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+// every tracked connection, including ones still negotiating (each already
+// holds an RTCPeerConnection, so pending ones count against the cap too)
+function connectionCount() {
+  if (!peer) return 0
+  return Object.values(peer.connections).reduce((n, list) => n + list.length, 0)
+}
+
+function takeJoinToken() {
+  if (!joinRefillTimer) {
+    joinRefillTimer = setInterval(() => {
+      joinTokens = Math.min(JOIN_BURST, joinTokens + 1)
+      if (joinTokens === JOIN_BURST) {
+        clearInterval(joinRefillTimer)
+        joinRefillTimer = null
+      }
+    }, JOIN_REFILL_MS)
+  }
+  if (joinTokens <= 0) return false
+  joinTokens--
+  return true
+}
+
+function sanitizeName(raw) {
+  return String(raw ?? '')
+    .replace(/[\p{Cc}\p{Cf}]/gu, '') // control + bidi/format characters
+    .substring(0, 15)
+    .trim()
 }
 
 window.startPeerJS = function () {
   whichScreen.value = 'room'
-  peer?.destroy()
-  const wmID = crypto.randomUUID().split('-')[0]
-  peer = new Peer(`uspwip-fun-super-unique-id-${wmID}`)
+  destroyPeer()
+  const wmID = newRoomId()
+  const thisPeer = new JsonOnlyPeer(`uspwip-fun-super-unique-id-${wmID}`)
+  peer = thisPeer
   joinURL.value = `${USPWIP_WEB_BASE_URL}/join#${wmID}`
   window.copyJoinLink()
 
-  peer.on('disconnected', () => {
+  thisPeer.on('error', (err) => {
+    console.error(err)
+    if (err?.type === 'unavailable-id' && peer === thisPeer) {
+      // astronomically unlikely, but just get a fresh room id
+      window.startPeerJS()
+    }
+  })
+
+  thisPeer.on('disconnected', () => {
     setTimeout(() => {
-      if (peer.destroyed) return
-      peer.reconnect() // this *will* throw errors if the room start/close buttons are spammed but that's fine
+      if (thisPeer.destroyed || peer !== thisPeer) return
+      try {
+        thisPeer.reconnect()
+      } catch (err) {
+        console.error(err)
+      }
       sendNotification(
         'Connection to signaling server lost, reconnecting....',
         '#ff6b6b',
@@ -87,39 +184,110 @@ window.startPeerJS = function () {
     }, 2000)
   })
 
-  peer.on('connection', (conn) => {
+  // we never accept media calls
+  thisPeer.on('call', (call) => {
+    try {
+      call.close()
+    } catch (err) {
+      console.error(err)
+    }
+  })
+
+  thisPeer.on('connection', (conn) => {
+    if (typeof conn?.on !== 'function' || conn.serialization !== 'json') {
+      try {
+        conn?.close?.()
+      } catch {
+        // ignore
+      }
+      return
+    }
+
+    const alreadyConnected = (thisPeer.connections[conn.peer] ?? []).some(
+      (c) => c !== conn && c.open
+    )
+    // (the new connection is already in peer.connections, hence `>`)
+    if (alreadyConnected || connectionCount() > MAX_CONNECTIONS || !takeJoinToken()) {
+      console.warn(`Rejected connection from ${conn.peer}`)
+      conn.close()
+      return
+    }
+
     console.log(`Client connected: ${conn.peer}`)
+
+    let introduced = false
+    let msgWindowStart = Date.now()
+    let msgCount = 0
+    const introTimer = setTimeout(() => {
+      if (!introduced) {
+        console.warn(`Removed ${conn.peer}: no introduction`)
+        conn.close()
+      }
+    }, INTRO_TIMEOUT_MS)
 
     conn.on('open', () => {
       console.log(`Connection opened: ${conn.peer}`)
     })
 
+    conn.on('error', (err) => {
+      console.error(err)
+    })
+
     conn.on('data', (data) => {
+      const now = Date.now()
+      if (now - msgWindowStart >= 1000) {
+        msgWindowStart = now
+        msgCount = 0
+      }
+      if (++msgCount > MSG_RATE_LIMIT) {
+        console.error(`Removed ${conn.peer} for flooding`)
+        conn.close()
+        return
+      }
+      if (!data || typeof data !== 'object' || typeof data.type !== 'string') return
+
       try {
-        if (data?.type === 'client-introduction') {
-          if (!(conn.peer in internalPointers)) {
-            internalPointers[conn.peer] = {
-              peerId: conn.peer,
-              number: newPointerNumber(internalPointers),
-              name: data?.content?.name?.toString()?.substring(0, 15)?.trim(),
-              color: data?.content?.color?.toString(),
-              x: Math.round(Math.random() * overlayDimensions?.width),
-              y: Math.round(Math.random() * overlayDimensions?.height),
-              orgX: 0,
-              orgY: 0,
-              rotation: 0,
-              mousedown: false
-            }
+        if (data.type === 'client-introduction') {
+          if (introduced) return // one introduction per connection
+          if (internalPointers[conn.peer]) {
+            // one connection per guest (two racing connections from the same
+            // peer would otherwise share, and then delete, one pointer)
+            conn.close()
+            return
           }
+          if (Object.keys(internalPointers).length >= MAX_PLAYERS) {
+            sendNotification('Room is full', '#ff6b6b', '#000000', '#000000', '#ff6b6b', 4000)
+            conn.close()
+            return
+          }
+          introduced = true
+          clearTimeout(introTimer)
+          const color = data.content?.color
+          internalPointers[conn.peer] = {
+            peerId: conn.peer,
+            number: newPointerNumber(internalPointers),
+            name: sanitizeName(data.content?.name) || 'Unknown',
+            color: HEX_COLOR.test(color) ? color : '#000000',
+            x: Math.round(Math.random() * overlayDimensions?.width),
+            y: Math.round(Math.random() * overlayDimensions?.height),
+            orgX: 0,
+            orgY: 0,
+            rotation: 0,
+            mousedown: false,
+            active: false
+          }
+          pointerConns.set(conn.peer, conn)
           pointers.value = Object.values(internalPointers)
           sendIntPtUpdate(Object.values(internalPointers))
           conn.send({
             type: 'host-introduction',
             content: { name: hostName.value }
           })
-          const pointerColor = internalPointers[conn.peer]?.color || '#000000'
-          const pointerName = internalPointers[conn.peer]?.name || 'Unknown'
-          const pointerNumber = internalPointers[conn.peer]?.number ?? '??'
+          const {
+            color: pointerColor,
+            name: pointerName,
+            number: pointerNumber
+          } = internalPointers[conn.peer]
           sendNotification(
             `${pointerName} joined as player ${pointerNumber}`,
             pointerColor,
@@ -128,40 +296,36 @@ window.startPeerJS = function () {
             '#FFFFFF',
             4000
           )
-        } else if (data?.type === 'client-mousemove') {
-          if (conn.peer in internalPointers) {
-            const localPointer = internalPointers[conn.peer]
-            const localX = Math.max(
-              Math.min(localPointer.x + data.content.x, overlayDimensions?.width ?? 0),
-              0
-            )
-            const localY = Math.max(
-              Math.min(localPointer.y + data.content.y, overlayDimensions?.height ?? 0),
-              0
-            )
-            const localMousedown = data.content.mousedown
-            if (localMousedown && !localPointer.mousedown) {
-              localPointer.orgX = localPointer.x
-              localPointer.orgY = localPointer.y
-            }
-            localPointer.x = localX
-            localPointer.y = localY
-            if (localMousedown) {
-              const deltaX = localPointer.x - localPointer.orgX
-              const deltaY = localPointer.y - localPointer.orgY
-              if (deltaX ** 2 + deltaY ** 2 >= 100) {
-                const targetDeg = Math.atan2(deltaX, deltaY) * (-180 / Math.PI)
-                localPointer.rotation = shortestRotation(localPointer.rotation, targetDeg)
-              }
-            }
-            if (!localMousedown && localPointer.mousedown) {
-              localPointer.rotation = shortestRotation(localPointer.rotation, 0)
-            }
-            localPointer.mousedown = localMousedown
-            localPointer.active = data.content.active
-            sendIntPtUpdate(Object.values(internalPointers))
+        } else if (data.type === 'client-mousemove') {
+          const localPointer = internalPointers[conn.peer]
+          const dx = data.content?.x
+          const dy = data.content?.y
+          if (!localPointer || !Number.isFinite(dx) || !Number.isFinite(dy)) return
+          if (Math.abs(dx) > MAX_DELTA || Math.abs(dy) > MAX_DELTA) return
+          const localX = Math.max(Math.min(localPointer.x + dx, overlayDimensions?.width ?? 0), 0)
+          const localY = Math.max(Math.min(localPointer.y + dy, overlayDimensions?.height ?? 0), 0)
+          const localMousedown = data.content.mousedown === true
+          if (localMousedown && !localPointer.mousedown) {
+            localPointer.orgX = localPointer.x
+            localPointer.orgY = localPointer.y
           }
-        } else if (data?.type === 'ping') {
+          localPointer.x = localX
+          localPointer.y = localY
+          if (localMousedown) {
+            const deltaX = localPointer.x - localPointer.orgX
+            const deltaY = localPointer.y - localPointer.orgY
+            if (deltaX ** 2 + deltaY ** 2 >= 100) {
+              const targetDeg = Math.atan2(deltaX, deltaY) * (-180 / Math.PI)
+              localPointer.rotation = shortestRotation(localPointer.rotation, targetDeg)
+            }
+          }
+          if (!localMousedown && localPointer.mousedown) {
+            localPointer.rotation = shortestRotation(localPointer.rotation, 0)
+          }
+          localPointer.mousedown = localMousedown
+          localPointer.active = data.content.active === true
+          sendIntPtUpdate(Object.values(internalPointers))
+        } else if (data.type === 'ping') {
           conn.send({
             type: 'pong'
           })
@@ -174,6 +338,9 @@ window.startPeerJS = function () {
     })
 
     conn.on('close', () => {
+      clearTimeout(introTimer)
+      if (!introduced || peer !== thisPeer || pointerConns.get(conn.peer) !== conn) return
+      pointerConns.delete(conn.peer)
       const pointerColor = internalPointers[conn.peer]?.color || '#000000'
       const pointerName = internalPointers[conn.peer]?.name || 'Unknown'
       if (conn.peer in internalPointers) {
@@ -199,7 +366,6 @@ function sendIntPtUpdate(ipValues) {
 
 function sendNotification(content, borderColor, textColor, shadowColor, backgroundColor, timeout) {
   window.api.send('toast-notification', {
-    timestamp: Date.now().toString(),
     content: content,
     colors: {
       border: borderColor,

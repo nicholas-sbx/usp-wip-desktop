@@ -8,6 +8,7 @@ files:
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!native/**'
 asarUnpack:
   - resources/**
 win:
@@ -28,6 +29,10 @@ nsis:
 # dmg:
 #   artifactName: ${name}-${version}.${ext}
 linux:
+  # native Wayland layer-shell overlay helper (see native/wayland-overlay)
+  extraResources:
+    - from: native/wayland-overlay/build/uspwip-wl-overlay
+      to: uspwip-wl-overlay
   target:
     - AppImage
     # - snap
@@ -36,6 +41,15 @@ linux:
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
+# https://www.electronjs.org/docs/latest/tutorial/fuses
+electronFuses:
+  # no `ELECTRON_RUN_AS_NODE=1 uspwip ...` / NODE_OPTIONS / --inspect code injection
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+  # we serve the UI from app://, file:// pages don't need extra powers
+  grantFileProtocolExtraPrivileges: false
 publish:
   provider: generic
   url: https://example.com/auto-updates

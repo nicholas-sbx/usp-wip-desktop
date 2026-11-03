@@ -9,7 +9,7 @@ const notifications = inject('notifications')
     <TransitionGroup name="notif-list">
       <Notification
         v-for="notification in notifications"
-        :key="notification.timestamp"
+        :key="notification.id"
         :notification="notification"
       />
     </TransitionGroup>
