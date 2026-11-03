@@ -3,10 +3,9 @@
 // host's chosen lifetime, then fade out.
 import { inject, watch } from 'vue'
 import MaskedText from '../components/MaskedText.vue'
-import { FONT_STEPS } from '../typing'
+import { FONT_STEPS, NOTE_FADE_MS } from '../typing'
 import { bubblePlacement } from './bubblePlacement'
 
-const NOTE_FADE_MS = 1000
 const PIN_ANIMATION_WINDOW_MS = 500
 
 const notes = inject('notes')
@@ -31,11 +30,14 @@ function noteStyle(note) {
 
 function computeStyle(note) {
   const size = FONT_STEPS[note.step] ?? FONT_STEPS[0]
+  const isDraft = note.kind === 'draft' // a departed guest's live text, fading out
   const now = Date.now()
   const animations = []
   // only animate the "shrink into a note" for a note that was just pinned,
   // not when the overlay is recreated or the host changes the lifetime
-  if (now - note.createdAt < PIN_ANIMATION_WINDOW_MS) animations.push('note-pin 180ms ease-out')
+  if (!isDraft && now - note.createdAt < PIN_ANIMATION_WINDOW_MS) {
+    animations.push('note-pin 180ms ease-out')
+  }
   if (note.expiresAt !== null) {
     const delay = Math.max(0, note.expiresAt - now - NOTE_FADE_MS)
     animations.push(`note-fade ${NOTE_FADE_MS}ms linear ${delay}ms forwards`)
@@ -44,7 +46,7 @@ function computeStyle(note) {
     '--bubble-color': note.color,
     // the pin animation starts at exactly the size the draft had
     '--pin-from': size.draftPx / size.notePx,
-    fontSize: `${size.notePx}px`,
+    fontSize: `${isDraft ? size.draftPx : size.notePx}px`,
     animation: animations.join(', ') || 'none'
   }
 }
@@ -58,7 +60,11 @@ function computeStyle(note) {
       class="notePositioner"
       :style="bubblePlacement(note.x, note.y, viewport)"
     >
-      <div class="bubble note" :style="noteStyle(note)">
+      <div
+        class="bubble"
+        :class="note.kind === 'draft' ? 'draft' : 'note'"
+        :style="noteStyle(note)"
+      >
         <MaskedText :text="note.text" :mask="note.mask" mask-color="#1d1d1d" />
       </div>
     </div>

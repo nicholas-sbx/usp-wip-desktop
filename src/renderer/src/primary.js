@@ -13,6 +13,7 @@ import {
   fontStep,
   MAX_NOTES,
   MAX_NOTES_PER_PLAYER,
+  NOTE_FADE_MS,
   NOTE_LIFETIMES,
   TYPING,
   sanitizeTypedText
@@ -102,6 +103,7 @@ watch(censorEnabled, () => {
 })
 watch(noteLifetime, () => {
   for (const note of notes) {
+    if (note.leaving) continue // a departed guest's notes keep fading out
     note.expiresAt = noteExpiry(note.createdAt)
     scheduleNoteExpiry(note)
   }
@@ -136,11 +138,11 @@ window.kickPeer = function (peerId) {
 
   pointerConns.delete(peerId)
   if (peerId in internalPointers) {
+    fadeOutTextOf(internalPointers[peerId])
     clearTimeout(internalPointers[peerId].draftTimer)
     delete internalPointers[peerId]
     publishPointers({ list: true })
   }
-  removeNotes((note) => note.peerId === peerId)
 }
 
 function destroyPeer() {
@@ -409,6 +411,7 @@ window.startPeerJS = function () {
       const pointerColor = internalPointers[conn.peer]?.color || '#000000'
       const pointerName = internalPointers[conn.peer]?.name || 'Unknown'
       if (conn.peer in internalPointers) {
+        fadeOutTextOf(internalPointers[conn.peer])
         clearTimeout(internalPointers[conn.peer].draftTimer)
         delete internalPointers[conn.peer]
       }
@@ -421,7 +424,6 @@ window.startPeerJS = function () {
         4000,
         maskFor(pointerName)
       )
-      // (their pinned notes stay until they expire; kicking removes them)
       publishPointers({ list: true })
     })
   })
@@ -521,12 +523,53 @@ function pinNote(pointer, text, clearDraft = true) {
   publishPointers()
 }
 
+/**
+ * A guest who leaves (or is kicked) fades out: their pinned notes (even
+ * "until cleared" ones) get a short expiry, and the text they were typing
+ * becomes a copy at the same spot and size that fades with them.
+ */
+function fadeOutTextOf(pointer) {
+  const until = Date.now() + NOTE_FADE_MS
+  let changed = false
+  for (const note of notes) {
+    if (note.peerId !== pointer.peerId || note.leaving) continue
+    note.leaving = true
+    // (one that is already fading sooner keeps its own timing)
+    note.expiresAt = note.expiresAt === null ? until : Math.min(note.expiresAt, until)
+    scheduleNoteExpiry(note)
+    changed = true
+  }
+  if (pointer.draft) {
+    const ghost = {
+      id: ++lastNoteId,
+      kind: 'draft',
+      peerId: pointer.peerId,
+      number: pointer.number,
+      color: pointer.color,
+      x: pointer.x,
+      y: pointer.y,
+      text: pointer.draft.text,
+      step: pointer.draft.step,
+      createdAt: Date.now(),
+      expiresAt: until,
+      leaving: true,
+      timer: null
+    }
+    notes.push(ghost)
+    scheduleNoteExpiry(ghost)
+    changed = true
+  }
+  // sent before the pointer (and its live text) disappears, so there's no gap
+  if (changed) publishNotes()
+}
+
 function publishNotes() {
-  noteCount.value = notes.length
+  noteCount.value = notes.filter((note) => note.kind !== 'draft').length
   window.api.send(
     'update-notes',
     notes.map((note) => ({
       id: note.id,
+      kind: note.kind === 'draft' ? 'draft' : 'note',
       number: note.number,
       color: note.color,
       x: note.x,

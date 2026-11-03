@@ -146,6 +146,7 @@ function sanitizeNote(n) {
     y: clampNumber(n.y, 0, MAX_OVERLAY_DIM),
     text,
     mask,
+    kind: n.kind === 'draft' ? 'draft' : 'note',
     step: Math.trunc(clampNumber(n.step, 0, MAX_FONT_STEP)),
     createdAt: time(n.createdAt) ?? Date.now(),
     expiresAt: time(n.expiresAt)

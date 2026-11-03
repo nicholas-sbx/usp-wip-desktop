@@ -41,7 +41,7 @@ While a guest's picture-in-picture controller has focus, whatever they type show
 - **Hide bad words**: blacks out bad words in guest names and typed text as they're typed, using [obscenity](https://github.com/jo3-l/obscenity) plus extra checks for fancy Unicode letters and spaced-out letters (`src/renderer/src/censor.js`, tests: `npm test`). The hidden characters keep their exact width, so text never changes shape.
 - **Notes stay**: how long pinned notes last (15 seconds to "until cleared"), and **Clear notes**.
 
-Kicking a guest removes their notes.
+When a guest leaves (or is kicked), everything they wrote fades out: the text they were typing and their pinned notes, even ones set to stay until cleared.
 
 ### CI and releases
 
