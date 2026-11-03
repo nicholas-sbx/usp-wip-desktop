@@ -61,6 +61,8 @@ export const DEFAULT_NOTE_LIFETIME = 60
 
 export const MAX_NOTES_PER_PLAYER = 8
 export const MAX_NOTES = 64
+// how long a note (or a departed guest's text) takes to fade out
+export const NOTE_FADE_MS = 1000
 
 // Only characters that are dangerous are removed: control characters, and
 // bidi controls (a right-to-left override would make "kcuf" *display* as a
