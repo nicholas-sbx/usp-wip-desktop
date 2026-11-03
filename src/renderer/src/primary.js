@@ -33,15 +33,19 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 /**
  * PeerJS lets the *connecting* peer pick the serialization. The default
  * "binary" serializer reassembles chunked messages with no size/time limit
- * (a remote peer can exhaust our memory), and the serializer lookup table is a
- * plain object, so `serialization: "constructor"` yields a bogus connection
- * that later makes peer.destroy() throw. Only JSON is accepted: each JSON
- * message is a single, size-capped data channel message.
+ * (a remote peer can exhaust our memory), so only JSON connections are kept
+ * (each JSON message is a single, size-capped data channel message): the
+ * 'connection' handler closes any other kind before its channel opens, so
+ * nothing is ever parsed with another serializer. The serializer lookup table
+ * is a plain object, so `serialization: "constructor"` would yield a bogus
+ * connection that makes peer.destroy() throw (or a TypeError inside PeerJS
+ * for other unknown names): unknown names get the JSON serializer instead.
  */
 class JsonOnlyPeer extends Peer {
   constructor(...args) {
     super(...args)
-    this._serializers = Object.assign(Object.create(null), { json: this._serializers.json })
+    const known = Object.assign(Object.create(null), this._serializers)
+    this._serializers = new Proxy(known, { get: (table, name) => table[name] ?? table.json })
   }
 }
 
@@ -71,6 +75,9 @@ var peer
 var internalPointers = {}
 var notes = []
 var lastNoteId = 0
+// the connection each guest's pointer belongs to (kept out of the pointer
+// objects, which are turned into what the overlay gets)
+var pointerConns = new Map()
 var overlayDimensions = { width: 0, height: 0 }
 var joinTokens = JOIN_BURST
 var joinRefillTimer = null
@@ -121,6 +128,7 @@ window.kickPeer = function (peerId) {
     }
   }
 
+  pointerConns.delete(peerId)
   if (peerId in internalPointers) {
     clearTimeout(internalPointers[peerId].draftTimer)
     delete internalPointers[peerId]
@@ -139,6 +147,7 @@ function destroyPeer() {
   peer = null
   for (const p of Object.values(internalPointers)) clearTimeout(p.draftTimer)
   internalPointers = {}
+  pointerConns.clear()
   publishPointers({ list: true })
   removeNotes(() => true)
 }
@@ -284,6 +293,12 @@ window.startPeerJS = function () {
       try {
         if (data.type === 'client-introduction') {
           if (introduced) return // one introduction per connection
+          if (internalPointers[conn.peer]) {
+            // one connection per guest (two racing connections from the same
+            // peer would otherwise share, and then delete, one pointer)
+            conn.close()
+            return
+          }
           if (Object.keys(internalPointers).length >= MAX_PLAYERS) {
             sendNotification('Room is full', '#ff6b6b', '#000000', '#000000', '#ff6b6b', 4000)
             conn.close()
@@ -306,9 +321,9 @@ window.startPeerJS = function () {
             active: false,
             draft: null, // { text, rev, seq, holdMs, step } while the guest is typing
             draftTimer: null,
-            conn,
             typing: createTypingState()
           }
+          pointerConns.set(conn.peer, conn)
           publishPointers({ list: true })
           conn.send({
             type: 'host-introduction',
@@ -383,7 +398,8 @@ window.startPeerJS = function () {
 
     conn.on('close', () => {
       clearTimeout(introTimer)
-      if (!introduced || peer !== thisPeer) return
+      if (!introduced || peer !== thisPeer || pointerConns.get(conn.peer) !== conn) return
+      pointerConns.delete(conn.peer)
       const pointerColor = internalPointers[conn.peer]?.color || '#000000'
       const pointerName = internalPointers[conn.peer]?.name || 'Unknown'
       if (conn.peer in internalPointers) {
@@ -440,7 +456,7 @@ function expireDraft(pointer) {
   pointer.draft = null
   publishPointers()
   try {
-    pointer.conn?.send({ type: 'host-draft-expired', content: { seq } })
+    pointerConns.get(pointer.peerId)?.send({ type: 'host-draft-expired', content: { seq } })
   } catch (err) {
     console.error(err)
   }

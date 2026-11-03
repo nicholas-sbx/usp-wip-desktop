@@ -423,6 +423,7 @@ function startLayerShellOverlay() {
     // output unplugged / compositor closed us: re-place on a remaining monitor
     overlaySurfaceRequested = false
     overlayCfg = null
+    layerShell.detach() // drop the last full-resolution frame
     destroyOverlayWindow()
     const now = Date.now()
     recentCloses = recentCloses.filter((t) => now - t < 10000).concat(now)
@@ -440,6 +441,7 @@ function startLayerShellOverlay() {
   layerShell.on('exit', (code) => {
     overlaySurfaceRequested = false
     overlayCfg = null
+    layerShell.detach()
     destroyOverlayWindow()
     if (quitting) return
     if (helperRestarts >= 5) {

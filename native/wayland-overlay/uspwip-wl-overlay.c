@@ -70,6 +70,22 @@ enum { CMD_SHOW = 1, CMD_HIDE = 2, CMD_FRAME = 3, CMD_QUIT = 4 };
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
+// Never bind a version whose events this binary has no listener slot for.
+// The listener structs come from the wayland headers this was *compiled*
+// against (e.g. libwayland 1.20 on the CI builder), which can be older than
+// the libwayland it runs with; an event past the end of a listener struct
+// makes libwayland abort ("listener function for opcode N ... is NULL").
+#ifdef WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION
+#define COMPOSITOR_MAX_VERSION 6u // wl_surface.preferred_buffer_scale/_transform
+#else
+#define COMPOSITOR_MAX_VERSION 5u
+#endif
+#ifdef WL_OUTPUT_NAME_SINCE_VERSION
+#define OUTPUT_MAX_VERSION 4u // wl_output.name/description
+#else
+#define OUTPUT_MAX_VERSION 3u
+#endif
+
 struct rect {
   int32_t x, y, w, h; // w <= 0 || h <= 0 means empty
 };
@@ -507,10 +523,16 @@ static double surface_scale(void) {
   return o ? output_scale_guess(o) : 1.0;
 }
 
+// without a viewport only integer buffer scales work: render at the next
+// integer scale up (announce() and try_commit() must agree on it)
+static int32_t integer_buffer_scale(void) {
+  int32_t k = (int32_t)ceil(surface_scale() - 1e-6);
+  return MAX(k, 1);
+}
+
 static void announce(void) {
   if (!st.surface || !st.configured || st.lw <= 0 || st.lh <= 0) return;
-  double s = surface_scale();
-  if (!st.viewporter) s = ceil(s); // without a viewport only integer buffer scales work
+  double s = st.viewporter ? surface_scale() : integer_buffer_scale();
   int32_t bw = (int32_t)lround(st.lw * s), bh = (int32_t)lround(st.lh * s);
   bw = MIN(MAX(bw, 1), MAX_DIM);
   bh = MIN(MAX(bh, 1), MAX_DIM);
@@ -588,8 +610,8 @@ static void try_commit(void) {
   if (st.viewport) {
     wp_viewport_set_destination(st.viewport, st.lw, st.lh);
   } else {
-    int32_t k = (int32_t)lround(surface_scale());
-    if (k < 1 || st.cw % k || st.ch % k) k = 1;
+    int32_t k = integer_buffer_scale();
+    if (st.cw % k || st.ch % k) k = 1;
     wl_surface_set_buffer_scale(st.surface, k);
   }
   st.frame_cb = wl_surface_frame(st.surface);
@@ -826,11 +848,11 @@ static void read_stdin(void) {
 static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
                             const char *iface, uint32_t version) {
   (void)data;
-  // never bind newer than what the *runtime* libwayland-client understands,
-  // otherwise unknown events would kill the connection
+  // never bind newer than the runtime libwayland understands, nor newer than
+  // this binary has listeners for (see COMPOSITOR_MAX_VERSION)
   if (strcmp(iface, wl_compositor_interface.name) == 0) {
-    st.compositor = wl_registry_bind(reg, name, &wl_compositor_interface,
-                                     MIN(version, (uint32_t)MIN(wl_compositor_interface.version, 6)));
+    uint32_t v = MIN(version, MIN((uint32_t)wl_compositor_interface.version, COMPOSITOR_MAX_VERSION));
+    st.compositor = wl_registry_bind(reg, name, &wl_compositor_interface, v);
   } else if (strcmp(iface, wl_shm_interface.name) == 0) {
     st.shm = wl_registry_bind(reg, name, &wl_shm_interface, 1);
   } else if (strcmp(iface, zwlr_layer_shell_v1_interface.name) == 0) {
@@ -850,8 +872,8 @@ static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
     if (!o) return;
     o->global_name = name;
     o->scale = 1;
-    o->wl = wl_registry_bind(reg, name, &wl_output_interface,
-                             MIN(version, (uint32_t)MIN(wl_output_interface.version, 4)));
+    uint32_t v = MIN(version, MIN((uint32_t)wl_output_interface.version, OUTPUT_MAX_VERSION));
+    o->wl = wl_registry_bind(reg, name, &wl_output_interface, v);
     wl_output_add_listener(o->wl, &output_listener, o);
     wl_list_insert(&st.outputs, &o->link);
     output_attach_xdg(o);
